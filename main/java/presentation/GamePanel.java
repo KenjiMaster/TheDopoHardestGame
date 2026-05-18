@@ -6,174 +6,208 @@ import javax.swing.*;
 import java.awt.*;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
+import java.awt.geom.Rectangle2D;
+import java.util.List;
 
-public class GamePanel extends JPanel {
+public class GamePanel extends JPanel implements Runnable {
 
     private CardLayout layout;
     private JPanel contenedor;
     private HardestGame game;
-    private Timer gameTimer;
+    private Cell[][] grid;
+    private static final int CELL_SIZE = GameConfig.CELL_SIZE;
 
+    // Game loop
+    private Thread gameThread;
+    private boolean running;
+    private static final int TARGET_FPS = 60;
+    private static final double NS_PER_FRAME = 1_000_000_000.0 / TARGET_FPS;
+
+    // Input
     private boolean izquierda, derecha, arriba, abajo;
 
     public GamePanel(CardLayout layout, JPanel contenedor) {
         this.layout = layout;
         this.contenedor = contenedor;
         this.game = new HardestGame();
-        prepareElements();
-        prepareActions();
-        prepareTimer();
-    }
+        this.grid = game.getLevel().getGrid();
 
-    private void prepareElements() {
-        setPreferredSize(new Dimension(800, 500));
         setFocusable(true);
-    }
-
-    private void prepareActions() {
         addKeyListener(new KeyAdapter() {
             @Override
             public void keyPressed(KeyEvent e) {
                 switch (e.getKeyCode()) {
-                    case KeyEvent.VK_LEFT,  KeyEvent.VK_A -> izquierda = true;
-                    case KeyEvent.VK_RIGHT, KeyEvent.VK_D -> derecha   = true;
-                    case KeyEvent.VK_UP,    KeyEvent.VK_W -> arriba    = true;
-                    case KeyEvent.VK_DOWN,  KeyEvent.VK_S -> abajo     = true;
+                    case KeyEvent.VK_LEFT:  izquierda = true; break;
+                    case KeyEvent.VK_RIGHT: derecha   = true; break;
+                    case KeyEvent.VK_UP:    arriba    = true; break;
+                    case KeyEvent.VK_DOWN:  abajo     = true; break;
                 }
             }
 
             @Override
             public void keyReleased(KeyEvent e) {
                 switch (e.getKeyCode()) {
-                    case KeyEvent.VK_LEFT,  KeyEvent.VK_A -> izquierda = false;
-                    case KeyEvent.VK_RIGHT, KeyEvent.VK_D -> derecha   = false;
-                    case KeyEvent.VK_UP,    KeyEvent.VK_W -> arriba    = false;
-                    case KeyEvent.VK_DOWN,  KeyEvent.VK_S -> abajo     = false;
+                    case KeyEvent.VK_LEFT:  izquierda = false; break;
+                    case KeyEvent.VK_RIGHT: derecha   = false; break;
+                    case KeyEvent.VK_UP:    arriba    = false; break;
+                    case KeyEvent.VK_DOWN:  abajo     = false; break;
                 }
             }
         });
-    }
 
-    private void prepareTimer() {
-        gameTimer = new Timer(16, e -> {
-            int dx = 0, dy = 0;
-            if (izquierda) dx -= 1;
-            if (derecha)   dx += 1;
-            if (arriba)    dy -= 1;
-            if (abajo)     dy += 1;
-
-            game.movePlayer(dx, dy);
-            game.update();
-
-            if (game.isLevelComplete()) {
-                gameTimer.stop();
-                layout.show(contenedor, "MENU");
-            }
-
-            repaint();
+        addHierarchyListener(e -> {
+            if (isShowing()) requestFocusInWindow();
         });
     }
 
-    public void iniciar() {
-        game = new HardestGame();
-        izquierda = derecha = arriba = abajo = false;
-        gameTimer.start();
-        requestFocusInWindow();
+    public void startGame() {
+        running = true;
+        gameThread = new Thread(this);
+        gameThread.start();
     }
 
-    public void detener() {
-        gameTimer.stop();
+    public void stopGame() {
+        running = false;
+    }
+
+    @Override
+    public void run() {
+        long lastTime = System.nanoTime();
+
+        while (running) {
+            long currentTime = System.nanoTime();
+            double delta = (currentTime - lastTime) / NS_PER_FRAME;
+            lastTime = currentTime;
+
+            update(delta);
+            SwingUtilities.invokeLater(this::repaint);
+
+            long sleepTime = (long)((lastTime + NS_PER_FRAME - System.nanoTime()) / 1_000_000);
+            if (sleepTime > 0) {
+                try {
+                    Thread.sleep(sleepTime);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
+    }
+
+    private void update(double delta) {
+        game.getLevel().updateTime(delta);
+        game.getLevel().getPlayer().updateInvincibility();
+        Direction direction = getDirectionFromInput();
+        if (direction != null) {
+            game.getLevel().getPlayer().move(direction, delta, grid);
+        }
+
+        for (Enemy enemy : game.getLevel().getEnemies()) {
+            enemy.update(delta, grid);
+        }
+
+        checkCollisions();
+        game.getLevel().cleanInactiveEntities();
+    }
+
+    private void checkCollisions() {
+        Player player = game.getLevel().getPlayer();
+        List<Entity> entities = game.getLevel().getEntities();
+
+        // enemigos contra entidades interactuables (bombas)
+        for (Enemy enemy : game.getLevel().getEnemies()) {
+            if (!enemy.isAlive()) continue;
+            for (Entity entity : entities) {
+                if (entity instanceof Interactable && enemy.collition(entity)) {
+                    ((Interactable) entity).interact(enemy);
+                }
+            }
+        }
+
+        if (player.isInvincible()) return;
+
+        // jugador contra todas las entidades
+        for (Entity entity : entities) {
+            if (player.collition(entity) && entity instanceof Interactable) {
+                ((Interactable) entity).interact(player);
+            }
+        }
+    }
+
+    private Direction getDirectionFromInput() {
+        if (arriba && derecha)   return Direction.NORTH_EAST;
+        if (arriba && izquierda) return Direction.NORTH_WEST;
+        if (abajo && derecha)    return Direction.SOUTH_EAST;
+        if (abajo && izquierda)  return Direction.SOUTH_WEST;
+        if (arriba)              return Direction.NORTH;
+        if (abajo)               return Direction.SOUTH;
+        if (derecha)             return Direction.EAST;
+        if (izquierda)           return Direction.WEST;
+        return null;
     }
 
     @Override
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
-        Graphics2D g2 = (Graphics2D) g;
-        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        Graphics2D g2d = (Graphics2D) g;
 
-        Level level = game.getLevel();
-        int cellSize = Level.CELL_SIZE;
+        // 1. grilla (fondo)
+        drawGrid(g2d);
 
-        int offsetX = (getWidth()  - level.getWidthPixels())  / 2;
-        int offsetY = (getHeight() - level.getHeightPixels()) / 2;
+        // 2. entidades sobre el fondo
+        drawEntities(g2d, game.getLevel().getEntities());
 
-        g2.translate(offsetX, offsetY);
-
-        dibujarFondo(g2, level, cellSize);
-        dibujarCeldas(g2, level, cellSize);
-        dibujarEnemigos(g2);
-        dibujarJugador(g2);
-        dibujarHUD(g2, level);
-
-        g2.translate(-offsetX, -offsetY);
+        // 3. jugador encima de todo
+        drawPlayer(g2d, game.getLevel().getPlayer());
     }
 
-    private void dibujarFondo(Graphics2D g2, Level level, int cellSize) {
-        g2.setColor(new Color(173, 216, 230));
-        g2.fillRect(0, 0, level.getWidthPixels(), level.getHeightPixels());
-    }
-
-    private void dibujarCeldas(Graphics2D g2, Level level, int cellSize) {
-        Cell[][] grid = level.getGrid();
-        for (int fila = 0; fila < grid.length; fila++) {
-            for (int col = 0; col < grid[fila].length; col++) {
-                Cell cell = grid[fila][col];
-                int px = col * cellSize;
-                int py = fila * cellSize;
-
-                switch (cell.getType()) {
-                    case WALL -> {
-                        g2.setColor(new Color(50, 50, 80));
-                        g2.fillRect(px, py, cellSize, cellSize);
-                    }
-                    case SAFE_ZONE_START, SAFE_ZONE_END -> {
-                        g2.setColor(new Color(144, 238, 144));
-                        g2.fillRect(px, py, cellSize, cellSize);
-                        g2.setColor(new Color(100, 200, 100));
-                        g2.drawRect(px, py, cellSize, cellSize);
-                    }
-                    case WALKABLE -> {
-                        g2.setColor(Color.WHITE);
-                        g2.fillRect(px, py, cellSize, cellSize);
-                        g2.setColor(new Color(200, 200, 210));
-                        g2.drawRect(px, py, cellSize, cellSize);
-                    }
-                }
+    private void drawGrid(Graphics2D g) {
+        for (int i = 0; i < grid.length; i++) {
+            for (int j = 0; j < grid[i].length; j++) {
+                drawCell(g, grid[i][j], j * CELL_SIZE, i * CELL_SIZE);
             }
         }
     }
 
-    private void dibujarEnemigos(Graphics2D g2) {
-        g2.setColor(new Color(30, 100, 220));
-        for (Enemy enemy : game.getEnemies()) {
-            int ex = enemy.getX();
-            int ey = enemy.getY();
-            int s  = Enemy.SIZE;
-            g2.fillOval(ex, ey, s, s);
-            g2.setColor(new Color(10, 60, 180));
-            g2.drawOval(ex, ey, s, s);
-            g2.setColor(new Color(30, 100, 220));
+    private void drawCell(Graphics2D g, Cell cell, int x, int y) {
+        switch (cell.getType()) {
+            case WALL:         g.setColor(Color.BLACK); break;
+            case INITIAL_ZONE: g.setColor(Color.GREEN); break;
+            case WALKABLE:     g.setColor(Color.WHITE); break;
+            case FINAL_ZONE:   g.setColor(new Color(0, 180, 0));  break;
+            default:           g.setColor(Color.GRAY);  break;
+        }
+        g.fillRect(x, y, CELL_SIZE, CELL_SIZE);
+        g.setColor(Color.DARK_GRAY);
+        g.drawRect(x, y, CELL_SIZE, CELL_SIZE);
+    }
+
+    private void drawEntities(Graphics2D g, List<Entity> entities) {
+        for (Entity entity : entities) {
+            Color color = getEntityColor(entity);
+            if (color == null) continue;
+
+            Rectangle2D hitBox = entity.getHitBox();
+            g.setColor(color);
+            g.fill(hitBox);
+            g.setColor(Color.DARK_GRAY);
+            g.draw(hitBox);
         }
     }
 
-    private void dibujarJugador(Graphics2D g2) {
-        Player player = game.getPlayer();
-        int px = player.getX();
-        int py = player.getY();
-        int s  = Player.SIZE;
-
-        g2.setColor(new Color(220, 30, 30));
-        g2.fillRect(px, py, s, s);
-        g2.setColor(new Color(150, 10, 10));
-        g2.drawRect(px, py, s, s);
+    // Centraliza la lógica de color por tipo de entidad
+    private Color getEntityColor(Entity entity) {
+        if (entity instanceof Enemy)  return Color.BLUE;
+        if (entity instanceof Bomb)   return ((Bomb) entity).isActive()   ? Color.ORANGE : null;
+        if (entity instanceof Live)   return ((Live) entity).isActive()   ? Color.PINK   : null;
+        if (entity instanceof CYellow) return ((CYellow) entity).isCollected() ? null : Color.YELLOW;
+        return Color.YELLOW; // monedas u otros
     }
 
-    private void dibujarHUD(Graphics2D g2, Level level) {
-        g2.setColor(new Color(20, 20, 20));
-        g2.fillRect(0, -30, level.getWidthPixels(), 30);
-
-        g2.setColor(Color.WHITE);
-        g2.setFont(new Font("Monospaced", Font.BOLD, 14));
-        g2.drawString("DEATHS: " + game.getDeaths(), 10, -10);
+    private void drawPlayer(Graphics2D g, Player player) {
+        Rectangle2D hitBox = player.getHitBox();
+        g.setColor(player.getSkin().getColor());
+        g.fill(hitBox);
+        g.setColor(Color.DARK_GRAY);
+        g.draw(hitBox);
     }
 }

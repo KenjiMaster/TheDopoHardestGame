@@ -72,7 +72,8 @@ public class MenuPanel extends JPanel {
                     @Override
                     public void actionPerformed(ActionEvent e) {
                         layout.show(contenedor,"GAME");
-                        gamePanel.iniciar();
+                        gamePanel.startGame();
+                        gamePanel.requestFocusInWindow();
 
                     }
                 }
