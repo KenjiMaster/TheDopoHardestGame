@@ -1,0 +1,20 @@
+####################
+####################
+##SS##########WWFF##
+##SS#WWWWWWWWWW#FF##
+##SS#WWWWWWWWWW#FF##
+##SS#WWWWWWWWWW#FF##
+##SS#WWWCWWWWWW#FF##
+##SSWW##########FF##
+####################
+####################
+PLAYER 2 2 BLINKY
+BASIC 10 3 WEST
+SLIDING 11 4 NORTH
+BOMB 8 5
+LIVE 12 4
+TIME 60
+FINAL 18 1
+CYELLOW 5 3
+CYELLOW 8 3
+CYELLOW 11 3
